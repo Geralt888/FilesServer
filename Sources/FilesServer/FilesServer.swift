@@ -18,6 +18,7 @@ public protocol FilesServer: Sendable {
     func contentsOfDirectory(atPath path: String) async throws -> [FileObject]
     func contents(atPath path: String) async throws -> Data
     func removeItem(atPath path: String) async throws
+    func moveItem(atPath path: String, toPath: String) async throws
     func createDirectory(atPath path: String) async throws
     func play(for url: URL, path: String) -> Either<URL, AbstractAVIOContext>
 }
