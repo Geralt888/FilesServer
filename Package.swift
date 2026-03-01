@@ -14,7 +14,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "git@github.com:TracyPlayer/KSPlayer.git", from: "2.4.6"),
+        .package(path: "../../Geralt888/KSPlayer"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
