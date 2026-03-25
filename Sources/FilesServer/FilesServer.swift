@@ -119,8 +119,8 @@ public extension FilesServer {
 
     static func play(url: URL) -> Either<URL, AbstractAVIOContext> {
         let semaphore = DispatchSemaphore(value: 0) // 初始信号量值为 0
-        var drive: FilesServer?
-        Task {
+        nonisolated(unsafe) var drive: FilesServer?
+        Task.detached {
             do {
                 drive = try await getServer(url: url)
                 semaphore.signal()
