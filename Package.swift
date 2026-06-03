@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "FilesServer",
-    platforms: [.macOS(.v11), .macCatalyst(.v14), .iOS(.v14), .tvOS(.v14), .visionOS(.v1)],
+    platforms: [.macOS(.v11), .macCatalyst(.v14), .iOS(.v14), .tvOS(.v17), .visionOS(.v1)],
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
