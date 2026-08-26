@@ -70,7 +70,7 @@ private struct PlayPathFilesServer: FilesServer {
 
     func createDirectory(atPath _: String) async throws {}
 
-    func play(for _: URL, path: String) -> Either<URL, AbstractAVIOContext> {
+    func play(for _: URL, path: String) async -> Either<URL, AbstractAVIOContext> {
         .left(URL(fileURLWithPath: path))
     }
 }

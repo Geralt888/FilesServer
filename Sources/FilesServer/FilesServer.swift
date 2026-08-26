@@ -20,7 +20,7 @@ public protocol FilesServer: Sendable {
     func removeItem(atPath path: String) async throws
     func moveItem(atPath path: String, toPath: String) async throws
     func createDirectory(atPath path: String) async throws
-    func play(for url: URL, path: String) -> Either<URL, AbstractAVIOContext>
+    func play(for url: URL, path: String) async -> Either<URL, AbstractAVIOContext>
 }
 
 @globalActor
@@ -166,7 +166,7 @@ private extension String {
 }
 
 public extension FilesServer {
-    func play(for url: URL, path _: String) -> Either<URL, AbstractAVIOContext> {
+    func play(for url: URL, path _: String) async -> Either<URL, AbstractAVIOContext> {
         .left(url)
     }
 
@@ -258,7 +258,7 @@ public extension FilesServer {
                 guard let relativePath = url.relativePath(from: drive.url) else {
                     return .left(url)
                 }
-                return drive.play(for: url, path: relativePath)
+                return await drive.play(for: url, path: relativePath)
             }
         } catch {
             KSLog(error)
