@@ -87,8 +87,8 @@ private extension URL {
         guard scheme?.lowercased() == driveURL.scheme?.lowercased(),
               host?.lowercased() == driveURL.host?.lowercased(),
               port == driveURL.port,
-              decodedCredential(user) == decodedCredential(driveURL.user),
-              decodedCredential(password) == decodedCredential(driveURL.password),
+              decodedUsername == driveURL.decodedUsername,
+              decodedPassword == driveURL.decodedPassword,
               let targetPathComponents = normalizedPathComponents,
               let drivePathComponents = driveURL.normalizedPathComponents
         else {
@@ -106,8 +106,14 @@ private extension URL {
         return components.percentEncodedPath.normalizedPathComponents
     }
 
-    func decodedCredential(_ value: String?) -> String? {
-        value.map { $0.removingPercentEncoding ?? $0 }
+    var decodedUsername: String? {
+        URLComponents(url: self, resolvingAgainstBaseURL: false)?
+            .percentEncodedUser?.removingPercentEncoding
+    }
+
+    var decodedPassword: String? {
+        URLComponents(url: self, resolvingAgainstBaseURL: false)?
+            .percentEncodedPassword?.removingPercentEncoding
     }
 
     var containsDotPathComponent: Bool {
@@ -148,17 +154,12 @@ private extension String {
             guard let component = String(rawComponent).removingPercentEncoding else {
                 return nil
             }
-            switch component {
-            case ".":
-                continue
-            case "..":
-                guard !result.isEmpty else {
-                    return nil
-                }
-                result.removeLast()
-            default:
-                result.append(component)
+            guard component != ".", component != "..",
+                  !component.contains("/"), !component.contains("\\")
+            else {
+                return nil
             }
+            result.append(component)
         }
         return result
     }
@@ -208,8 +209,8 @@ public extension FilesServer {
                 components.scheme = requestURL.scheme
                 components.host = requestURL.host
                 components.port = requestURL.port
-                components.user = requestURL.decodedCredential(requestURL.user)
-                components.password = requestURL.decodedCredential(requestURL.password)
+                components.user = requestURL.decodedUsername
+                components.password = requestURL.decodedPassword
                 guard let url = components.url, let drive = startDiscovery(url: url) else {
                     return nil
                 }

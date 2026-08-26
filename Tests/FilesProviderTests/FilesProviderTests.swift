@@ -387,6 +387,56 @@ struct 文件服务器播放入口测试 {
     }
 
     @Test
+    func discovery重建URL保留字面量百分号凭据且只解码一次() async throws {
+        DiscoveryURLFilesServer.drives = []
+        DiscoveryURLFilesServer.discoveredURL = nil
+        defer {
+            DiscoveryURLFilesServer.drives = []
+            DiscoveryURLFilesServer.discoveredURL = nil
+        }
+
+        let url = try #require(URL(string: "smb://foo%2540bar:p%2540ss@host/share/file"))
+        _ = try await #require(DiscoveryURLFilesServer.getServer(url: url))
+        let discoveredURL = try #require(DiscoveryURLFilesServer.discoveredURL)
+        let components = try #require(URLComponents(url: discoveredURL, resolvingAgainstBaseURL: false))
+
+        #expect(components.user == "foo%40bar")
+        #expect(components.password == "p%40ss")
+        #expect(components.percentEncodedUser == "foo%2540bar")
+        #expect(components.percentEncodedPassword == "p%2540ss")
+    }
+
+    @Test
+    func 缓存匹配区分字面量百分号凭据和解码后的凭据() async throws {
+        let driveURL = try #require(URL(string: "smb://foo%2540bar:p%2540ss@host/share"))
+        MoveCapableFilesServer.drives = [MoveCapableFilesServer(url: driveURL)]
+        defer { MoveCapableFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://foo%40bar:p%40ss@host/share/file"))
+        let server = try await #require(MoveCapableFilesServer.getServer(url: url))
+
+        #expect(server.url != driveURL)
+    }
+
+    @Test
+    func discovery重建URL保留空用户名和空密码() async throws {
+        DiscoveryURLFilesServer.drives = []
+        DiscoveryURLFilesServer.discoveredURL = nil
+        defer {
+            DiscoveryURLFilesServer.drives = []
+            DiscoveryURLFilesServer.discoveredURL = nil
+        }
+
+        let url = try #require(URL(string: "smb://:@host/share/file"))
+        _ = try await #require(DiscoveryURLFilesServer.getServer(url: url))
+        let discoveredURL = try #require(DiscoveryURLFilesServer.discoveredURL)
+        let components = try #require(URLComponents(url: discoveredURL, resolvingAgainstBaseURL: false))
+
+        #expect(components.percentEncodedUser == "")
+        #expect(components.percentEncodedPassword == "")
+    }
+
+    @Test
     func discovery嵌套共享目录选择最长合法前缀() async throws {
         DiscoveryURLFilesServer.drives = []
         DiscoveryURLFilesServer.discoveredURL = nil
@@ -423,6 +473,47 @@ struct 文件服务器播放入口测试 {
         let result = await PlayPathFilesServer.play(url: url)
 
         #expect(result.left == url)
+    }
+
+    @Test
+    func 缓存匹配拒绝编码斜杠形成的路径穿越() async throws {
+        let driveURL = try #require(URL(string: "smb://host/share"))
+        PlayPathFilesServer.drives = [PlayPathFilesServer(url: driveURL)]
+        defer { PlayPathFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://host/share/foo%2F..%2F..%2Fsecret"))
+        let server = try await PlayPathFilesServer.getServer(url: url)
+
+        #expect(server == nil)
+    }
+
+    @Test
+    func 播放路径拒绝编码斜杠和反斜杠形成的越界路径() async throws {
+        let driveURL = try #require(URL(string: "smb://host/share"))
+        PlayPathFilesServer.drives = [PlayPathFilesServer(url: driveURL)]
+        defer { PlayPathFilesServer.drives = [] }
+
+        let urls = try [
+            #require(URL(string: "smb://host/share/foo%2F..%2F..%2Fsecret")),
+            #require(URL(string: "smb://host/share/foo%5C..%5C..%5Csecret")),
+        ]
+
+        for url in urls {
+            let result = await PlayPathFilesServer.play(url: url)
+            #expect(result.left == url)
+        }
+    }
+
+    @Test
+    func 普通百分号编码文件名仍传递解码后的相对路径() async throws {
+        let driveURL = try #require(URL(string: "smb://host/share"))
+        PlayPathFilesServer.drives = [PlayPathFilesServer(url: driveURL)]
+        defer { PlayPathFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://host/share/folder/movie%20part.mkv"))
+        let result = await PlayPathFilesServer.play(url: url)
+
+        #expect(result.left?.path == "/folder/movie part.mkv")
     }
 
     @Test
