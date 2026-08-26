@@ -28,6 +28,19 @@ actor BackgroundActor {
     static let shared = BackgroundActor()
 }
 
+public enum HTTPMethod: String {
+    case get = "GET"
+    case post = "POST"
+    case put = "PUT"
+    case delete = "DELETE"
+    case head = "HEAD"
+    case options = "OPTIONS"
+    case propfind = "PROPFIND"
+    case mkcol = "MKCOL"
+    case move = "MOVE"
+    case copy = "COPY"
+}
+
 public extension URL {
     static func url(scheme: String?, host: String, port: Int?, path: String?, username: String?, password: String?) -> URL? {
         var urlComponents = URLComponents()
@@ -48,6 +61,24 @@ public extension URL {
             urlComponents.password = password
         }
         return urlComponents.url
+    }
+
+    var withoutUserPassword: URL {
+        guard var components = URLComponents(url: self, resolvingAgainstBaseURL: false) else {
+            return self
+        }
+        components.user = nil
+        components.password = nil
+        return components.url ?? self
+    }
+
+    func add(username: String, password: String) -> URL {
+        guard var components = URLComponents(url: self, resolvingAgainstBaseURL: false) else {
+            return self
+        }
+        components.user = username
+        components.password = password
+        return components.url ?? self
     }
 }
 
@@ -117,24 +148,16 @@ public extension FilesServer {
         }
     }
 
-    static func play(url: URL) -> Either<URL, AbstractAVIOContext> {
-        let semaphore = DispatchSemaphore(value: 0) // 初始信号量值为 0
-        nonisolated(unsafe) var drive: FilesServer?
-        Task {
-            do {
-                drive = try await getServer(url: url)
-                semaphore.signal()
-            } catch {
-                KSLog(error)
-                semaphore.signal()
+    static func play(url: URL) async -> Either<URL, AbstractAVIOContext> {
+        do {
+            if let drive = try await getServer(url: url) {
+                var newPath = url.path
+                newPath.removeFirst(drive.url.path.count)
+                return drive.play(for: url, path: newPath)
             }
+        } catch {
+            KSLog(error)
         }
-        semaphore.wait()
-        guard let drive else {
-            return .left(url)
-        }
-        var newPath = url.path
-        newPath.removeFirst(drive.url.path.count)
-        return drive.play(for: url, path: newPath)
+        return .left(url)
     }
 }
