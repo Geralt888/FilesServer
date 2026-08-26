@@ -37,6 +37,44 @@ private struct MoveCapableFilesServer: FilesServer {
     func createDirectory(atPath _: String) async throws {}
 }
 
+private struct PlayPathFilesServer: FilesServer {
+    nonisolated(unsafe) static var drives: [FilesServer] = []
+
+    let url: URL
+
+    static func startDiscovery(url _: URL) -> Self? {
+        Self(url: URL(string: "smb://host/share")!)
+    }
+
+    static func scheme(isHttps: Bool) -> String {
+        isHttps ? "https" : "http"
+    }
+
+    func listShares() async throws -> [String] {
+        ["share"]
+    }
+
+    func connect(share _: String) async throws {}
+
+    func contentsOfDirectory(atPath _: String) async throws -> [KSPlayer.FileObject] {
+        []
+    }
+
+    func contents(atPath _: String) async throws -> Data {
+        Data()
+    }
+
+    func removeItem(atPath _: String) async throws {}
+
+    func moveItem(atPath _: String, toPath _: String) async throws {}
+
+    func createDirectory(atPath _: String) async throws {}
+
+    func play(for _: URL, path: String) -> Either<URL, AbstractAVIOContext> {
+        .left(URL(fileURLWithPath: path))
+    }
+}
+
 @Test
 func URL可以移除并重新附加凭据() throws {
     let source = try #require(URL(string: "https://alice:secret@example.com:8443/media/file%20name.mkv?download=1"))
@@ -61,6 +99,32 @@ func 文件服务器播放入口是异步API() async throws {
     let url = URL(string: "http://example.com/media/file.mp4")!
 
     _ = await play(url)
+}
+
+@Suite(.serialized)
+struct 文件服务器播放入口测试 {
+    @Test
+    func 服务器路径不匹配时返回原始URL() async throws {
+        PlayPathFilesServer.drives = []
+        defer { PlayPathFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://host"))
+        let result = await PlayPathFilesServer.play(url: url)
+
+        #expect(result.left == url)
+    }
+
+    @Test
+    func 向服务器传递正确的相对路径() async throws {
+        let driveURL = try #require(URL(string: "smb://host/share"))
+        PlayPathFilesServer.drives = [PlayPathFilesServer(url: driveURL)]
+        defer { PlayPathFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://host/share/media/file.mp4"))
+        let result = await PlayPathFilesServer.play(url: url)
+
+        #expect(result.left?.path == "/media/file.mp4")
+    }
 }
 
 private func 接受异步播放入口<Result>(_ play: @escaping (URL) async -> Result) -> (URL) async -> Result {

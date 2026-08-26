@@ -151,9 +151,16 @@ public extension FilesServer {
     static func play(url: URL) async -> Either<URL, AbstractAVIOContext> {
         do {
             if let drive = try await getServer(url: url) {
-                var newPath = url.path
-                newPath.removeFirst(drive.url.path.count)
-                return drive.play(for: url, path: newPath)
+                let path = url.path
+                let drivePath = drive.url.path
+                guard path.count >= drivePath.count, path.hasPrefix(drivePath) else {
+                    return .left(url)
+                }
+                let relativePath = path.dropFirst(drivePath.count)
+                guard relativePath.isEmpty || drivePath.hasSuffix("/") || relativePath.first == "/" else {
+                    return .left(url)
+                }
+                return drive.play(for: url, path: String(relativePath))
             }
         } catch {
             KSLog(error)
