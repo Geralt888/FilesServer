@@ -123,6 +123,56 @@ private final class DiscoveryShareFilesServer: FilesServer, @unchecked Sendable 
     func createDirectory(atPath _: String) async throws {}
 }
 
+private final class DiscoveryURLFilesServer: FilesServer, @unchecked Sendable {
+    nonisolated(unsafe) static var drives: [FilesServer] = []
+    nonisolated(unsafe) static var discoveredURL: URL?
+
+    private let serverURL: URL
+    private var connectedShare: String?
+
+    var url: URL {
+        guard let connectedShare else {
+            return serverURL
+        }
+        return serverURL.appendingPathComponent(connectedShare)
+    }
+
+    init(url: URL) {
+        serverURL = url
+    }
+
+    static func startDiscovery(url: URL) -> Self? {
+        discoveredURL = url
+        return Self(url: url)
+    }
+
+    static func scheme(isHttps: Bool) -> String {
+        isHttps ? "https" : "http"
+    }
+
+    func listShares() async throws -> [String] {
+        ["share", "share/sub"]
+    }
+
+    func connect(share: String) async throws {
+        connectedShare = share
+    }
+
+    func contentsOfDirectory(atPath _: String) async throws -> [KSPlayer.FileObject] {
+        []
+    }
+
+    func contents(atPath _: String) async throws -> Data {
+        Data()
+    }
+
+    func removeItem(atPath _: String) async throws {}
+
+    func moveItem(atPath _: String, toPath _: String) async throws {}
+
+    func createDirectory(atPath _: String) async throws {}
+}
+
 @Test
 func URL可以移除并重新附加凭据() throws {
     let source = try #require(URL(string: "https://alice:secret@example.com:8443/media/file%20name.mkv?download=1"))
@@ -290,6 +340,102 @@ struct 文件服务器播放入口测试 {
 
         #expect(server.url != driveURL)
         #expect(server.url.password == nil)
+    }
+
+    @Test
+    func URL构造器保留显式空用户名和空密码() throws {
+        let missing = try #require(URL.url(
+            scheme: "smb",
+            host: "host",
+            port: nil,
+            path: nil,
+            username: nil,
+            password: nil
+        ))
+        let blank = try #require(URL.url(
+            scheme: "smb",
+            host: "host",
+            port: nil,
+            path: nil,
+            username: "",
+            password: ""
+        ))
+
+        #expect(missing.user == nil)
+        #expect(missing.password == nil)
+        #expect(blank.user == "")
+        #expect(blank.password == "")
+        #expect(blank != missing)
+    }
+
+    @Test
+    func discovery重建URL保留percentEncoded凭据语义() async throws {
+        DiscoveryURLFilesServer.drives = []
+        DiscoveryURLFilesServer.discoveredURL = nil
+        defer {
+            DiscoveryURLFilesServer.drives = []
+            DiscoveryURLFilesServer.discoveredURL = nil
+        }
+
+        let url = try #require(URL(string: "smb://domain%5Cuser:p%40ss@host/share/sub/file"))
+        _ = try await #require(DiscoveryURLFilesServer.getServer(url: url))
+        let discoveredURL = try #require(DiscoveryURLFilesServer.discoveredURL)
+
+        #expect(discoveredURL.user?.removingPercentEncoding == "domain\\user")
+        #expect(discoveredURL.password?.removingPercentEncoding == "p@ss")
+        #expect(discoveredURL.password != "p%2540ss")
+    }
+
+    @Test
+    func discovery嵌套共享目录选择最长合法前缀() async throws {
+        DiscoveryURLFilesServer.drives = []
+        DiscoveryURLFilesServer.discoveredURL = nil
+        defer {
+            DiscoveryURLFilesServer.drives = []
+            DiscoveryURLFilesServer.discoveredURL = nil
+        }
+
+        let url = try #require(URL(string: "smb://host/share/sub/file"))
+        let server = try await #require(DiscoveryURLFilesServer.getServer(url: url))
+
+        #expect(server.url == URL(string: "smb://host/share/sub"))
+    }
+
+    @Test
+    func 缓存匹配拒绝percentEncoded点段越过共享目录() async throws {
+        let driveURL = try #require(URL(string: "smb://host/share"))
+        PlayPathFilesServer.drives = [PlayPathFilesServer(url: driveURL)]
+        defer { PlayPathFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://host/share/%2E%2E/other"))
+        let server = try await PlayPathFilesServer.getServer(url: url)
+
+        #expect(server == nil)
+    }
+
+    @Test
+    func 播放路径使用规范化组件且不转发共享目录外路径() async throws {
+        let driveURL = try #require(URL(string: "smb://host/share"))
+        PlayPathFilesServer.drives = [PlayPathFilesServer(url: driveURL)]
+        defer { PlayPathFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://host/share/%2E%2E/other"))
+        let result = await PlayPathFilesServer.play(url: url)
+
+        #expect(result.left == url)
+    }
+
+    @Test
+    func 缓存匹配区分不同scheme() async throws {
+        let driveURL = try #require(URL(string: "smb://host/share"))
+        MoveCapableFilesServer.drives = [MoveCapableFilesServer(url: driveURL)]
+        defer { MoveCapableFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "https://host/share/file"))
+        let server = try await #require(MoveCapableFilesServer.getServer(url: url))
+
+        #expect(server.url.scheme == "https")
+        #expect(server.url != driveURL)
     }
 }
 

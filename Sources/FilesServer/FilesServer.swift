@@ -54,10 +54,10 @@ public extension URL {
         } else {
             urlComponents.path = ""
         }
-        if username?.isEmpty == false {
+        if let username {
             urlComponents.user = username
         }
-        if password?.isEmpty == false {
+        if let password {
             urlComponents.password = password
         }
         return urlComponents.url
@@ -87,42 +87,75 @@ private extension URL {
         guard scheme?.lowercased() == driveURL.scheme?.lowercased(),
               host?.lowercased() == driveURL.host?.lowercased(),
               port == driveURL.port,
-              normalizedCredential(user) == normalizedCredential(driveURL.user),
-              normalizedCredential(password) == normalizedCredential(driveURL.password)
+              decodedCredential(user) == decodedCredential(driveURL.user),
+              decodedCredential(password) == decodedCredential(driveURL.password),
+              let targetPathComponents = normalizedPathComponents,
+              let drivePathComponents = driveURL.normalizedPathComponents
         else {
             return false
         }
 
-        let targetPathComponents = normalizedPathComponents
-        let drivePathComponents = driveURL.normalizedPathComponents
         return targetPathComponents.count >= drivePathComponents.count
             && targetPathComponents.starts(with: drivePathComponents)
     }
 
-    var normalizedPathComponents: [String] {
-        let components = standardized.pathComponents
-        return components.first == "/" ? Array(components.dropFirst()) : components
+    var normalizedPathComponents: [String]? {
+        guard let components = URLComponents(url: self, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        return components.percentEncodedPath.normalizedPathComponents
     }
 
-    func normalizedCredential(_ value: String?) -> String? {
+    func decodedCredential(_ value: String?) -> String? {
         value.map { $0.removingPercentEncoding ?? $0 }
+    }
+
+    var containsDotPathComponent: Bool {
+        guard let components = URLComponents(url: self, resolvingAgainstBaseURL: false) else {
+            return true
+        }
+        return components.percentEncodedPath
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .contains { rawComponent in
+                let component = String(rawComponent).removingPercentEncoding ?? String(rawComponent)
+                return component == "." || component == ".."
+            }
+    }
+
+    func relativePath(from driveURL: URL) -> String? {
+        guard let targetPathComponents = normalizedPathComponents,
+              let drivePathComponents = driveURL.normalizedPathComponents,
+              targetPathComponents.count >= drivePathComponents.count,
+              targetPathComponents.starts(with: drivePathComponents)
+        else {
+            return nil
+        }
+
+        let relativeComponents = targetPathComponents.dropFirst(drivePathComponents.count)
+        guard !relativeComponents.isEmpty else {
+            return ""
+        }
+
+        let relativePath = relativeComponents.joined(separator: "/")
+        return driveURL.path.hasSuffix("/") ? relativePath : "/\(relativePath)"
     }
 }
 
 private extension String {
-    var normalizedPathComponents: [String] {
+    var normalizedPathComponents: [String]? {
         var result = [String]()
         for rawComponent in split(separator: "/", omittingEmptySubsequences: true) {
-            let component = String(rawComponent).removingPercentEncoding ?? String(rawComponent)
+            guard let component = String(rawComponent).removingPercentEncoding else {
+                return nil
+            }
             switch component {
             case ".":
                 continue
             case "..":
-                if result.isEmpty || result.last == ".." {
-                    result.append(component)
-                } else {
-                    result.removeLast()
+                guard !result.isEmpty else {
+                    return nil
                 }
+                result.removeLast()
             default:
                 result.append(component)
             }
@@ -150,7 +183,7 @@ public extension FilesServer {
     static func getServer(url: URL, name: String? = nil) async throws -> FilesServer? {
         if let drive = drives
             .filter({ url.matches(driveURL: $0.url) })
-            .max(by: { $0.url.normalizedPathComponents.count < $1.url.normalizedPathComponents.count })
+            .max(by: { ($0.url.normalizedPathComponents?.count ?? 0) < ($1.url.normalizedPathComponents?.count ?? 0) })
         {
             return drive
         } else {
@@ -167,20 +200,27 @@ public extension FilesServer {
                     return nil
                 }
             } else {
-                let path = url.path
-                let pathComponents = url.normalizedPathComponents
+                let requestURL = url
+                guard let pathComponents = requestURL.normalizedPathComponents else {
+                    return nil
+                }
                 var components = URLComponents()
-                components.scheme = url.scheme
-                components.host = url.host
-                components.port = url.port
-                components.user = url.user
-                components.password = url.password
+                components.scheme = requestURL.scheme
+                components.host = requestURL.host
+                components.port = requestURL.port
+                components.user = requestURL.decodedCredential(requestURL.user)
+                components.password = requestURL.decodedCredential(requestURL.password)
                 guard let url = components.url, let drive = startDiscovery(url: url) else {
                     return nil
                 }
                 let shares = try await drive.listShares()
                 var share = shares
-                    .map { share in (share, share.normalizedPathComponents) }
+                    .compactMap { share -> (String, [String])? in
+                        guard let sharePathComponents = share.normalizedPathComponents else {
+                            return nil
+                        }
+                        return (share, sharePathComponents)
+                    }
                     .filter { _, sharePathComponents in
                         pathComponents.count >= sharePathComponents.count
                             && pathComponents.starts(with: sharePathComponents)
@@ -189,15 +229,20 @@ public extension FilesServer {
                         lhs.1.count < rhs.1.count
                     }?.0
                 if share == nil {
+                    guard !requestURL.containsDotPathComponent else {
+                        return nil
+                    }
                     if let first = shares.first {
                         share = first
                     } else {
-                        share = path.split(separator: "/").first.map { String($0) }
+                        share = pathComponents.first
                     }
                 }
                 try await drive.connect(share: share ?? "")
                 // 解决多线程并发crash的问题
-                if let share, let value = drives.first(where: { $0.url == url.appendingPathComponent(share) }) {
+                if let share,
+                   let value = drives.first(where: { url.appendingPathComponent(share).matches(driveURL: $0.url) })
+                {
                     return value
                 }
                 drives.append(drive)
@@ -209,16 +254,10 @@ public extension FilesServer {
     static func play(url: URL) async -> Either<URL, AbstractAVIOContext> {
         do {
             if let drive = try await getServer(url: url) {
-                let path = url.path
-                let drivePath = drive.url.path
-                guard path.count >= drivePath.count, path.hasPrefix(drivePath) else {
+                guard let relativePath = url.relativePath(from: drive.url) else {
                     return .left(url)
                 }
-                let relativePath = path.dropFirst(drivePath.count)
-                guard relativePath.isEmpty || drivePath.hasSuffix("/") || relativePath.first == "/" else {
-                    return .left(url)
-                }
-                return drive.play(for: url, path: String(relativePath))
+                return drive.play(for: url, path: relativePath)
             }
         } catch {
             KSLog(error)
