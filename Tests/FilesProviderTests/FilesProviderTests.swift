@@ -125,6 +125,50 @@ struct 文件服务器播放入口测试 {
 
         #expect(result.left?.path == "/media/file.mp4")
     }
+
+    @Test
+    func 缓存服务器路径按组件边界匹配并继续选择正确服务器() async throws {
+        let shareURL = try #require(URL(string: "smb://host/share"))
+        let share2URL = try #require(URL(string: "smb://host/share2"))
+        PlayPathFilesServer.drives = [
+            PlayPathFilesServer(url: shareURL),
+            PlayPathFilesServer(url: share2URL),
+        ]
+        defer { PlayPathFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://host/share2/file"))
+        let server = try await #require(PlayPathFilesServer.getServer(url: url))
+
+        #expect(server.url == share2URL)
+    }
+
+    @Test
+    func 缓存服务器路径存在嵌套时选择最长合法前缀() async throws {
+        let shareURL = try #require(URL(string: "smb://host/share"))
+        let nestedURL = try #require(URL(string: "smb://host/share/sub"))
+        PlayPathFilesServer.drives = [
+            PlayPathFilesServer(url: shareURL),
+            PlayPathFilesServer(url: nestedURL),
+        ]
+        defer { PlayPathFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://host/share/sub/file"))
+        let server = try await #require(PlayPathFilesServer.getServer(url: url))
+
+        #expect(server.url == nestedURL)
+    }
+
+    @Test
+    func 缓存服务器根路径可以匹配无斜杠的根URL() async throws {
+        let rootURL = try #require(URL(string: "smb://host/"))
+        PlayPathFilesServer.drives = [PlayPathFilesServer(url: rootURL)]
+        defer { PlayPathFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://host"))
+        let server = try await #require(PlayPathFilesServer.getServer(url: url))
+
+        #expect(server.url == rootURL)
+    }
 }
 
 private func 接受异步播放入口<Result>(_ play: @escaping (URL) async -> Result) -> (URL) async -> Result {

@@ -82,6 +82,29 @@ public extension URL {
     }
 }
 
+private extension URL {
+    func matches(driveURL: URL) -> Bool {
+        guard scheme?.lowercased() == driveURL.scheme?.lowercased(),
+              host?.lowercased() == driveURL.host?.lowercased(),
+              port == driveURL.port,
+              user == driveURL.user,
+              password == driveURL.password
+        else {
+            return false
+        }
+
+        let targetPathComponents = normalizedPathComponents
+        let drivePathComponents = driveURL.normalizedPathComponents
+        return targetPathComponents.count >= drivePathComponents.count
+            && targetPathComponents.starts(with: drivePathComponents)
+    }
+
+    var normalizedPathComponents: [String] {
+        let components = standardized.pathComponents
+        return components.first == "/" ? Array(components.dropFirst()) : components
+    }
+}
+
 public extension FilesServer {
     func play(for url: URL, path _: String) -> Either<URL, AbstractAVIOContext> {
         .left(url)
@@ -99,7 +122,10 @@ public extension FilesServer {
     /// 增加actor，防止并发导致crash
     @BackgroundActor
     static func getServer(url: URL, name: String? = nil) async throws -> FilesServer? {
-        if let drive = drives.first(where: { url.absoluteString.hasPrefix($0.url.absoluteString) }) {
+        if let drive = drives
+            .filter({ url.matches(driveURL: $0.url) })
+            .max(by: { $0.url.normalizedPathComponents.count < $1.url.normalizedPathComponents.count })
+        {
             return drive
         } else {
             if let name {
