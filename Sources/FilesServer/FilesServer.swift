@@ -87,8 +87,8 @@ private extension URL {
         guard scheme?.lowercased() == driveURL.scheme?.lowercased(),
               host?.lowercased() == driveURL.host?.lowercased(),
               port == driveURL.port,
-              user == driveURL.user,
-              password == driveURL.password
+              normalizedCredential(user) == normalizedCredential(driveURL.user),
+              normalizedCredential(password) == normalizedCredential(driveURL.password)
         else {
             return false
         }
@@ -102,6 +102,32 @@ private extension URL {
     var normalizedPathComponents: [String] {
         let components = standardized.pathComponents
         return components.first == "/" ? Array(components.dropFirst()) : components
+    }
+
+    func normalizedCredential(_ value: String?) -> String? {
+        value.map { $0.removingPercentEncoding ?? $0 }
+    }
+}
+
+private extension String {
+    var normalizedPathComponents: [String] {
+        var result = [String]()
+        for rawComponent in split(separator: "/", omittingEmptySubsequences: true) {
+            let component = String(rawComponent).removingPercentEncoding ?? String(rawComponent)
+            switch component {
+            case ".":
+                continue
+            case "..":
+                if result.isEmpty || result.last == ".." {
+                    result.append(component)
+                } else {
+                    result.removeLast()
+                }
+            default:
+                result.append(component)
+            }
+        }
+        return result
     }
 }
 
@@ -142,6 +168,7 @@ public extension FilesServer {
                 }
             } else {
                 let path = url.path
+                let pathComponents = url.normalizedPathComponents
                 var components = URLComponents()
                 components.scheme = url.scheme
                 components.host = url.host
@@ -152,13 +179,18 @@ public extension FilesServer {
                     return nil
                 }
                 let shares = try await drive.listShares()
-                var share = shares.first { share in
-                    // nfs的share带有/， 但是smb没有
-                    path.hasPrefix("/" + share) || path.hasPrefix(share)
-                }
+                var share = shares
+                    .map { share in (share, share.normalizedPathComponents) }
+                    .filter { _, sharePathComponents in
+                        pathComponents.count >= sharePathComponents.count
+                            && pathComponents.starts(with: sharePathComponents)
+                    }
+                    .max { lhs, rhs in
+                        lhs.1.count < rhs.1.count
+                    }?.0
                 if share == nil {
                     if let first = shares.first {
-                        share = shares.first
+                        share = first
                     } else {
                         share = path.split(separator: "/").first.map { String($0) }
                     }

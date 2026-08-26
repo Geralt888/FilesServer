@@ -75,6 +75,54 @@ private struct PlayPathFilesServer: FilesServer {
     }
 }
 
+private final class DiscoveryShareFilesServer: FilesServer, @unchecked Sendable {
+    nonisolated(unsafe) static var drives: [FilesServer] = []
+
+    private let serverURL: URL
+    private var connectedShare: String?
+
+    var url: URL {
+        guard let connectedShare else {
+            return serverURL
+        }
+        return serverURL.appendingPathComponent(connectedShare)
+    }
+
+    init(url: URL) {
+        serverURL = url
+    }
+
+    static func startDiscovery(url: URL) -> Self? {
+        Self(url: url)
+    }
+
+    static func scheme(isHttps: Bool) -> String {
+        isHttps ? "https" : "http"
+    }
+
+    func listShares() async throws -> [String] {
+        ["share", "share2"]
+    }
+
+    func connect(share: String) async throws {
+        connectedShare = share
+    }
+
+    func contentsOfDirectory(atPath _: String) async throws -> [KSPlayer.FileObject] {
+        []
+    }
+
+    func contents(atPath _: String) async throws -> Data {
+        Data()
+    }
+
+    func removeItem(atPath _: String) async throws {}
+
+    func moveItem(atPath _: String, toPath _: String) async throws {}
+
+    func createDirectory(atPath _: String) async throws {}
+}
+
 @Test
 func URL可以移除并重新附加凭据() throws {
     let source = try #require(URL(string: "https://alice:secret@example.com:8443/media/file%20name.mkv?download=1"))
@@ -168,6 +216,80 @@ struct 文件服务器播放入口测试 {
         let server = try await #require(PlayPathFilesServer.getServer(url: url))
 
         #expect(server.url == rootURL)
+    }
+
+    @Test
+    func 首次发现服务器时按路径组件边界选择最长共享目录() async throws {
+        DiscoveryShareFilesServer.drives = []
+        defer { DiscoveryShareFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://host/share2/file"))
+        let server = try await #require(DiscoveryShareFilesServer.getServer(url: url))
+
+        #expect(server.url == URL(string: "smb://host/share2"))
+    }
+
+    @Test
+    func 缓存服务器匹配时忽略scheme和主机大小写() async throws {
+        let driveURL = try #require(URL(string: "SMB://HOST/share"))
+        PlayPathFilesServer.drives = [PlayPathFilesServer(url: driveURL)]
+        defer { PlayPathFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://host/share/file"))
+        let server = try await #require(PlayPathFilesServer.getServer(url: url))
+
+        #expect(server.url == driveURL)
+    }
+
+    @Test
+    func 缓存服务器不匹配不同端口() async throws {
+        let driveURL = try #require(URL(string: "smb://host:445/share"))
+        MoveCapableFilesServer.drives = [MoveCapableFilesServer(url: driveURL)]
+        defer { MoveCapableFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://host:446/share/file"))
+        let server = try await #require(MoveCapableFilesServer.getServer(url: url))
+
+        #expect(server.url != driveURL)
+        #expect(server.url.port == 446)
+    }
+
+    @Test
+    func 缓存服务器不匹配不同凭据() async throws {
+        let driveURL = try #require(URL(string: "smb://alice:secret@host/share"))
+        MoveCapableFilesServer.drives = [MoveCapableFilesServer(url: driveURL)]
+        defer { MoveCapableFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://bob:secret@host/share/file"))
+        let server = try await #require(MoveCapableFilesServer.getServer(url: url))
+
+        #expect(server.url != driveURL)
+        #expect(server.url.user == "bob")
+    }
+
+    @Test
+    func 缓存服务器匹配等价的凭据编码() async throws {
+        let driveURL = try #require(URL(string: "smb://alice:p%3Aass@host/share"))
+        MoveCapableFilesServer.drives = [MoveCapableFilesServer(url: driveURL)]
+        defer { MoveCapableFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://alice:p:ass@host/share/file"))
+        let server = try await #require(MoveCapableFilesServer.getServer(url: url))
+
+        #expect(server.url == driveURL)
+    }
+
+    @Test
+    func 缓存服务器区分缺失密码和空密码() async throws {
+        let driveURL = try #require(URL(string: "smb://alice:@host/share"))
+        MoveCapableFilesServer.drives = [MoveCapableFilesServer(url: driveURL)]
+        defer { MoveCapableFilesServer.drives = [] }
+
+        let url = try #require(URL(string: "smb://alice@host/share/file"))
+        let server = try await #require(MoveCapableFilesServer.getServer(url: url))
+
+        #expect(server.url != driveURL)
+        #expect(server.url.password == nil)
     }
 }
 
