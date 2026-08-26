@@ -22,6 +22,9 @@ let package = Package(
         .target(name: "FilesServer", dependencies: [
             "KSPlayer",
         ]),
+        .testTarget(name: "FilesProviderTests", dependencies: [
+            "FilesServer",
+        ]),
     ],
     swiftLanguageVersions: [
         .v5,
