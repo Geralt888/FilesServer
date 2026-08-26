@@ -1,6 +1,6 @@
 import Foundation
 @testable import FilesServer
-import class FilesServer.FileObject
+import KSPlayer
 import Testing
 
 private struct MoveCapableFilesServer: FilesServer {
@@ -22,7 +22,7 @@ private struct MoveCapableFilesServer: FilesServer {
 
     func connect(share _: String) async throws {}
 
-    func contentsOfDirectory(atPath _: String) async throws -> [FileObject] {
+    func contentsOfDirectory(atPath _: String) async throws -> [KSPlayer.FileObject] {
         []
     }
 
