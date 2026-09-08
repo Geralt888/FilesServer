@@ -16,12 +16,6 @@ private struct MoveCapableFilesServer: FilesServer {
         isHttps ? "https" : "http"
     }
 
-    func listShares() async throws -> [String] {
-        []
-    }
-
-    func connect(share _: String) async throws {}
-
     func contentsOfDirectory(atPath _: String) async throws -> [KSPlayer.FileObject] {
         []
     }
@@ -50,12 +44,6 @@ private struct PlayPathFilesServer: FilesServer {
         isHttps ? "https" : "http"
     }
 
-    func listShares() async throws -> [String] {
-        ["share"]
-    }
-
-    func connect(share _: String) async throws {}
-
     func contentsOfDirectory(atPath _: String) async throws -> [KSPlayer.FileObject] {
         []
     }
@@ -70,8 +58,11 @@ private struct PlayPathFilesServer: FilesServer {
 
     func createDirectory(atPath _: String) async throws {}
 
-    func play(for _: URL, path: String) async -> Either<URL, AbstractAVIOContext> {
-        .left(URL(fileURLWithPath: path))
+    var throwsOnPlay = false
+
+    func play(for url: URL) async throws -> Either<URL, AbstractAVIOContext> {
+        if throwsOnPlay { throw URLError(.cannotOpenFile) }
+        return .left(URL(fileURLWithPath: url.path))
     }
 }
 
@@ -79,14 +70,8 @@ private final class DiscoveryShareFilesServer: FilesServer, @unchecked Sendable 
     nonisolated(unsafe) static var drives: [FilesServer] = []
 
     private let serverURL: URL
-    private var connectedShare: String?
 
-    var url: URL {
-        guard let connectedShare else {
-            return serverURL
-        }
-        return serverURL.appendingPathComponent(connectedShare)
-    }
+    var url: URL { serverURL }
 
     init(url: URL) {
         serverURL = url
@@ -98,14 +83,6 @@ private final class DiscoveryShareFilesServer: FilesServer, @unchecked Sendable 
 
     static func scheme(isHttps: Bool) -> String {
         isHttps ? "https" : "http"
-    }
-
-    func listShares() async throws -> [String] {
-        ["share", "share2"]
-    }
-
-    func connect(share: String) async throws {
-        connectedShare = share
     }
 
     func contentsOfDirectory(atPath _: String) async throws -> [KSPlayer.FileObject] {
@@ -128,14 +105,8 @@ private final class DiscoveryURLFilesServer: FilesServer, @unchecked Sendable {
     nonisolated(unsafe) static var discoveredURL: URL?
 
     private let serverURL: URL
-    private var connectedShare: String?
 
-    var url: URL {
-        guard let connectedShare else {
-            return serverURL
-        }
-        return serverURL.appendingPathComponent(connectedShare)
-    }
+    var url: URL { serverURL }
 
     init(url: URL) {
         serverURL = url
@@ -148,14 +119,6 @@ private final class DiscoveryURLFilesServer: FilesServer, @unchecked Sendable {
 
     static func scheme(isHttps: Bool) -> String {
         isHttps ? "https" : "http"
-    }
-
-    func listShares() async throws -> [String] {
-        ["share", "share/sub"]
-    }
-
-    func connect(share: String) async throws {
-        connectedShare = share
     }
 
     func contentsOfDirectory(atPath _: String) async throws -> [KSPlayer.FileObject] {
@@ -194,26 +157,23 @@ func 文件服务器协议可以实现移动文件() async throws {
 @Test
 func 文件服务器播放入口是异步API() async throws {
     let play = 接受异步播放入口(MoveCapableFilesServer.play(url:))
-    let url = URL(string: "http://example.com/media/file.mp4")!
-
-    _ = await play(url)
+    _ = play
 }
 
 @Suite(.serialized)
 struct 文件服务器播放入口测试 {
     @Test
-    func 服务器路径不匹配时返回原始URL() async throws {
-        PlayPathFilesServer.drives = []
-        defer { PlayPathFilesServer.drives = [] }
-
+    func 实例播放抛错时返回原始URL() async throws {
         let url = try #require(URL(string: "smb://host"))
+        PlayPathFilesServer.drives = [PlayPathFilesServer(url: url, throwsOnPlay: true)]
+        defer { PlayPathFilesServer.drives = [] }
         let result = await PlayPathFilesServer.play(url: url)
 
         #expect(result.left == url)
     }
 
     @Test
-    func 向服务器传递正确的相对路径() async throws {
+    func 向服务器传递完整播放URL() async throws {
         let driveURL = try #require(URL(string: "smb://host/share"))
         PlayPathFilesServer.drives = [PlayPathFilesServer(url: driveURL)]
         defer { PlayPathFilesServer.drives = [] }
@@ -221,7 +181,7 @@ struct 文件服务器播放入口测试 {
         let url = try #require(URL(string: "smb://host/share/media/file.mp4"))
         let result = await PlayPathFilesServer.play(url: url)
 
-        #expect(result.left?.path == "/media/file.mp4")
+        #expect(result.left?.path == "/share/media/file.mp4")
     }
 
     @Test
@@ -235,7 +195,7 @@ struct 文件服务器播放入口测试 {
         defer { PlayPathFilesServer.drives = [] }
 
         let url = try #require(URL(string: "smb://host/share2/file"))
-        let server = try await #require(PlayPathFilesServer.getServer(url: url))
+        let server = try #require(PlayPathFilesServer.getServer(url: url))
 
         #expect(server.url == share2URL)
     }
@@ -251,7 +211,7 @@ struct 文件服务器播放入口测试 {
         defer { PlayPathFilesServer.drives = [] }
 
         let url = try #require(URL(string: "smb://host/share/sub/file"))
-        let server = try await #require(PlayPathFilesServer.getServer(url: url))
+        let server = try #require(PlayPathFilesServer.getServer(url: url))
 
         #expect(server.url == nestedURL)
     }
@@ -263,20 +223,20 @@ struct 文件服务器播放入口测试 {
         defer { PlayPathFilesServer.drives = [] }
 
         let url = try #require(URL(string: "smb://host"))
-        let server = try await #require(PlayPathFilesServer.getServer(url: url))
+        let server = try #require(PlayPathFilesServer.getServer(url: url))
 
         #expect(server.url == rootURL)
     }
 
     @Test
-    func 首次发现服务器时按路径组件边界选择最长共享目录() async throws {
+    func 首次发现将完整URL交给具体服务器() async throws {
         DiscoveryShareFilesServer.drives = []
         defer { DiscoveryShareFilesServer.drives = [] }
 
         let url = try #require(URL(string: "smb://host/share2/file"))
-        let server = try await #require(DiscoveryShareFilesServer.getServer(url: url))
+        let server = try #require(DiscoveryShareFilesServer.getServer(url: url))
 
-        #expect(server.url == URL(string: "smb://host/share2"))
+        #expect(server.url == url)
     }
 
     @Test
@@ -286,7 +246,7 @@ struct 文件服务器播放入口测试 {
         defer { PlayPathFilesServer.drives = [] }
 
         let url = try #require(URL(string: "smb://host/share/file"))
-        let server = try await #require(PlayPathFilesServer.getServer(url: url))
+        let server = try #require(PlayPathFilesServer.getServer(url: url))
 
         #expect(server.url == driveURL)
     }
@@ -298,7 +258,7 @@ struct 文件服务器播放入口测试 {
         defer { MoveCapableFilesServer.drives = [] }
 
         let url = try #require(URL(string: "smb://host:446/share/file"))
-        let server = try await #require(MoveCapableFilesServer.getServer(url: url))
+        let server = try #require(MoveCapableFilesServer.getServer(url: url))
 
         #expect(server.url != driveURL)
         #expect(server.url.port == 446)
@@ -311,7 +271,7 @@ struct 文件服务器播放入口测试 {
         defer { MoveCapableFilesServer.drives = [] }
 
         let url = try #require(URL(string: "smb://bob:secret@host/share/file"))
-        let server = try await #require(MoveCapableFilesServer.getServer(url: url))
+        let server = try #require(MoveCapableFilesServer.getServer(url: url))
 
         #expect(server.url != driveURL)
         #expect(server.url.user == "bob")
@@ -324,7 +284,7 @@ struct 文件服务器播放入口测试 {
         defer { MoveCapableFilesServer.drives = [] }
 
         let url = try #require(URL(string: "smb://alice:p:ass@host/share/file"))
-        let server = try await #require(MoveCapableFilesServer.getServer(url: url))
+        let server = try #require(MoveCapableFilesServer.getServer(url: url))
 
         #expect(server.url == driveURL)
     }
@@ -336,7 +296,7 @@ struct 文件服务器播放入口测试 {
         defer { MoveCapableFilesServer.drives = [] }
 
         let url = try #require(URL(string: "smb://alice@host/share/file"))
-        let server = try await #require(MoveCapableFilesServer.getServer(url: url))
+        let server = try #require(MoveCapableFilesServer.getServer(url: url))
 
         #expect(server.url != driveURL)
         #expect(server.url.password == nil)
@@ -378,7 +338,7 @@ struct 文件服务器播放入口测试 {
         }
 
         let url = try #require(URL(string: "smb://domain%5Cuser:p%40ss@host/share/sub/file"))
-        _ = try await #require(DiscoveryURLFilesServer.getServer(url: url))
+        _ = try #require(DiscoveryURLFilesServer.getServer(url: url))
         let discoveredURL = try #require(DiscoveryURLFilesServer.discoveredURL)
 
         #expect(discoveredURL.user?.removingPercentEncoding == "domain\\user")
@@ -396,7 +356,7 @@ struct 文件服务器播放入口测试 {
         }
 
         let url = try #require(URL(string: "smb://foo%2540bar:p%2540ss@host/share/file"))
-        _ = try await #require(DiscoveryURLFilesServer.getServer(url: url))
+        _ = try #require(DiscoveryURLFilesServer.getServer(url: url))
         let discoveredURL = try #require(DiscoveryURLFilesServer.discoveredURL)
         let components = try #require(URLComponents(url: discoveredURL, resolvingAgainstBaseURL: false))
 
@@ -413,7 +373,7 @@ struct 文件服务器播放入口测试 {
         defer { MoveCapableFilesServer.drives = [] }
 
         let url = try #require(URL(string: "smb://foo%40bar:p%40ss@host/share/file"))
-        let server = try await #require(MoveCapableFilesServer.getServer(url: url))
+        let server = try #require(MoveCapableFilesServer.getServer(url: url))
 
         #expect(server.url != driveURL)
     }
@@ -428,7 +388,7 @@ struct 文件服务器播放入口测试 {
         }
 
         let url = try #require(URL(string: "smb://:@host/share/file"))
-        _ = try await #require(DiscoveryURLFilesServer.getServer(url: url))
+        _ = try #require(DiscoveryURLFilesServer.getServer(url: url))
         let discoveredURL = try #require(DiscoveryURLFilesServer.discoveredURL)
         let components = try #require(URLComponents(url: discoveredURL, resolvingAgainstBaseURL: false))
 
@@ -437,7 +397,7 @@ struct 文件服务器播放入口测试 {
     }
 
     @Test
-    func discovery嵌套共享目录选择最长合法前缀() async throws {
+    func discovery保留完整嵌套路径() async throws {
         DiscoveryURLFilesServer.drives = []
         DiscoveryURLFilesServer.discoveredURL = nil
         defer {
@@ -446,9 +406,9 @@ struct 文件服务器播放入口测试 {
         }
 
         let url = try #require(URL(string: "smb://host/share/sub/file"))
-        let server = try await #require(DiscoveryURLFilesServer.getServer(url: url))
+        let server = try #require(DiscoveryURLFilesServer.getServer(url: url))
 
-        #expect(server.url == URL(string: "smb://host/share/sub"))
+        #expect(server.url == url)
     }
 
     @Test
@@ -458,7 +418,7 @@ struct 文件服务器播放入口测试 {
         defer { PlayPathFilesServer.drives = [] }
 
         let url = try #require(URL(string: "smb://host/share/%2E%2E/other"))
-        let server = try await PlayPathFilesServer.getServer(url: url)
+        let server = PlayPathFilesServer.getServer(url: url)
 
         #expect(server == nil)
     }
@@ -482,7 +442,7 @@ struct 文件服务器播放入口测试 {
         defer { PlayPathFilesServer.drives = [] }
 
         let url = try #require(URL(string: "smb://host/share/foo%2F..%2F..%2Fsecret"))
-        let server = try await PlayPathFilesServer.getServer(url: url)
+        let server = PlayPathFilesServer.getServer(url: url)
 
         #expect(server == nil)
     }
@@ -505,7 +465,7 @@ struct 文件服务器播放入口测试 {
     }
 
     @Test
-    func 普通百分号编码文件名仍传递解码后的相对路径() async throws {
+    func 普通百分号编码文件名仍传递完整URL() async throws {
         let driveURL = try #require(URL(string: "smb://host/share"))
         PlayPathFilesServer.drives = [PlayPathFilesServer(url: driveURL)]
         defer { PlayPathFilesServer.drives = [] }
@@ -513,7 +473,7 @@ struct 文件服务器播放入口测试 {
         let url = try #require(URL(string: "smb://host/share/folder/movie%20part.mkv"))
         let result = await PlayPathFilesServer.play(url: url)
 
-        #expect(result.left?.path == "/folder/movie part.mkv")
+        #expect(result.left?.path == "/share/folder/movie part.mkv")
     }
 
     @Test
@@ -523,7 +483,7 @@ struct 文件服务器播放入口测试 {
         defer { MoveCapableFilesServer.drives = [] }
 
         let url = try #require(URL(string: "https://host/share/file"))
-        let server = try await #require(MoveCapableFilesServer.getServer(url: url))
+        let server = try #require(MoveCapableFilesServer.getServer(url: url))
 
         #expect(server.url.scheme == "https")
         #expect(server.url != driveURL)
@@ -532,4 +492,27 @@ struct 文件服务器播放入口测试 {
 
 private func 接受异步播放入口<Result>(_ play: @escaping (URL) async -> Result) -> (URL) async -> Result {
     play
+}
+
+@Test
+func upstreamAPIContracts() async throws {
+    let getServer: (URL) -> (any FilesServer)? = MoveCapableFilesServer.getServer(url:)
+    _ = getServer
+    let url = URL(string: "https://example.com/movie.mp4")!
+    let server: any FilesServer = MoveCapableFilesServer(url: url)
+    let play: (URL) async throws -> Either<URL, AbstractAVIOContext> = server.play(for:)
+    #expect(try await play(url).left == url)
+}
+
+@Test
+func ratingSortSupportsBothDirectionsAndDirectoriesFirst() {
+    let root = URL(string: "https://example.com")!
+    let low = FileObject(url: root.appendingPathComponent("low"), allValues: [.ratingKey: Float(1)])
+    let high = FileObject(url: root.appendingPathComponent("high"), allValues: [.ratingKey: Float(5)])
+    let folder = FileObject(url: root.appendingPathComponent("folder"), allValues: [
+        .ratingKey: Float(3), .fileResourceTypeKey: URLFileResourceType.directory,
+    ])
+    #expect([high, folder, low].sorted(by: .rating).map(\.url) == [folder.url, low.url, high.url])
+    #expect([low, folder, high].sorted(by: .rating, ascending: false, isDirectoriesFirst: false).map(\.url)
+        == [high.url, folder.url, low.url])
 }

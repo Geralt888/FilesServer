@@ -8,24 +8,19 @@
 import Foundation
 import KSPlayer
 
+private let discoveryLock = NSRecursiveLock()
+
 public protocol FilesServer: Sendable {
     static var drives: [FilesServer] { get set }
     static func startDiscovery(url: URL) -> Self?
     static func scheme(isHttps: Bool) -> String
     var url: URL { get }
-    func listShares() async throws -> [String]
-    func connect(share: String) async throws
     func contentsOfDirectory(atPath path: String) async throws -> [FileObject]
     func contents(atPath path: String) async throws -> Data
     func removeItem(atPath path: String) async throws
     func moveItem(atPath path: String, toPath: String) async throws
     func createDirectory(atPath path: String) async throws
-    func play(for url: URL, path: String) async -> Either<URL, AbstractAVIOContext>
-}
-
-@globalActor
-actor BackgroundActor {
-    static let shared = BackgroundActor()
+    func play(for url: URL) async throws -> Either<URL, AbstractAVIOContext>
 }
 
 public enum HTTPMethod: String {
@@ -115,36 +110,6 @@ private extension URL {
         URLComponents(url: self, resolvingAgainstBaseURL: false)?
             .percentEncodedPassword?.removingPercentEncoding
     }
-
-    var containsDotPathComponent: Bool {
-        guard let components = URLComponents(url: self, resolvingAgainstBaseURL: false) else {
-            return true
-        }
-        return components.percentEncodedPath
-            .split(separator: "/", omittingEmptySubsequences: true)
-            .contains { rawComponent in
-                let component = String(rawComponent).removingPercentEncoding ?? String(rawComponent)
-                return component == "." || component == ".."
-            }
-    }
-
-    func relativePath(from driveURL: URL) -> String? {
-        guard let targetPathComponents = normalizedPathComponents,
-              let drivePathComponents = driveURL.normalizedPathComponents,
-              targetPathComponents.count >= drivePathComponents.count,
-              targetPathComponents.starts(with: drivePathComponents)
-        else {
-            return nil
-        }
-
-        let relativeComponents = targetPathComponents.dropFirst(drivePathComponents.count)
-        guard !relativeComponents.isEmpty else {
-            return ""
-        }
-
-        let relativePath = relativeComponents.joined(separator: "/")
-        return driveURL.path.hasSuffix("/") ? relativePath : "/\(relativePath)"
-    }
 }
 
 private extension String {
@@ -166,7 +131,7 @@ private extension String {
 }
 
 public extension FilesServer {
-    func play(for url: URL, path _: String) async -> Either<URL, AbstractAVIOContext> {
+    func play(for url: URL) async throws -> Either<URL, AbstractAVIOContext> {
         .left(url)
     }
 
@@ -179,86 +144,30 @@ public extension FilesServer {
         URL.url(scheme: scheme(isHttps: isHttps), host: host, port: port, path: path, username: username, password: password)
     }
 
-    /// 增加actor，防止并发导致crash
-    @BackgroundActor
-    static func getServer(url: URL, name: String? = nil) async throws -> FilesServer? {
+    static func getServer(url: URL) -> FilesServer? {
+        guard url.normalizedPathComponents != nil else {
+            return nil
+        }
+        // Discovery remains synchronous while cache lookup and insertion stay serialized.
+        discoveryLock.lock()
+        defer { discoveryLock.unlock() }
         if let drive = drives
             .filter({ url.matches(driveURL: $0.url) })
             .max(by: { ($0.url.normalizedPathComponents?.count ?? 0) < ($1.url.normalizedPathComponents?.count ?? 0) })
         {
             return drive
-        } else {
-            if let name {
-                var url = url
-                if url.lastPathComponent == name {
-                    url.deleteLastPathComponent()
-                }
-                if let drive = startDiscovery(url: url) {
-                    try await drive.connect(share: name)
-                    drives.append(drive)
-                    return drive
-                } else {
-                    return nil
-                }
-            } else {
-                let requestURL = url
-                guard let pathComponents = requestURL.normalizedPathComponents else {
-                    return nil
-                }
-                var components = URLComponents()
-                components.scheme = requestURL.scheme
-                components.host = requestURL.host
-                components.port = requestURL.port
-                components.user = requestURL.decodedUsername
-                components.password = requestURL.decodedPassword
-                guard let url = components.url, let drive = startDiscovery(url: url) else {
-                    return nil
-                }
-                let shares = try await drive.listShares()
-                var share = shares
-                    .compactMap { share -> (String, [String])? in
-                        guard let sharePathComponents = share.normalizedPathComponents else {
-                            return nil
-                        }
-                        return (share, sharePathComponents)
-                    }
-                    .filter { _, sharePathComponents in
-                        pathComponents.count >= sharePathComponents.count
-                            && pathComponents.starts(with: sharePathComponents)
-                    }
-                    .max { lhs, rhs in
-                        lhs.1.count < rhs.1.count
-                    }?.0
-                if share == nil {
-                    guard !requestURL.containsDotPathComponent else {
-                        return nil
-                    }
-                    if let first = shares.first {
-                        share = first
-                    } else {
-                        share = pathComponents.first
-                    }
-                }
-                try await drive.connect(share: share ?? "")
-                // 解决多线程并发crash的问题
-                if let share,
-                   let value = drives.first(where: { url.appendingPathComponent(share).matches(driveURL: $0.url) })
-                {
-                    return value
-                }
-                drives.append(drive)
-                return drive
-            }
         }
+        guard let drive = startDiscovery(url: url) else {
+            return nil
+        }
+        drives.append(drive)
+        return drive
     }
 
     static func play(url: URL) async -> Either<URL, AbstractAVIOContext> {
         do {
-            if let drive = try await getServer(url: url) {
-                guard let relativePath = url.relativePath(from: drive.url) else {
-                    return .left(url)
-                }
-                return await drive.play(for: url, path: relativePath)
+            if let drive = getServer(url: url) {
+                return try await drive.play(for: url)
             }
         } catch {
             KSLog(error)

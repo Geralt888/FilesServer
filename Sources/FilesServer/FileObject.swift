@@ -83,6 +83,7 @@ public extension FileObject {
         case creationDate
         /// Sorting by file modified date
         case fileSize
+        case rating
     }
 }
 
@@ -125,6 +126,8 @@ public extension [FileObject] {
                 return ascending ? fileCreation1 < fileCreation2 : fileCreation1 > fileCreation2
             case .fileSize:
                 return ascending ? $0.fileSize < $1.fileSize : $0.fileSize > $1.fileSize
+            case .rating:
+                return ascending ? $0.rating < $1.rating : $0.rating > $1.rating
             case .none:
                 return false
             }
