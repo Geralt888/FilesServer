@@ -20,6 +20,10 @@ public protocol FilesServer: Sendable {
     func play(for url: URL) async throws -> Either<URL, AbstractAVIOContext>
 }
 
+public protocol FilesSearchServer: FilesServer {
+    func search(term _: String) async throws -> [FileObject]
+}
+
 public enum HTTPMethod: String {
     case get = "GET"
     case post = "POST"
@@ -95,13 +99,11 @@ public extension FilesServer {
     static func getServer(url: URL) -> FilesServer? {
         if let drive = drives.first(where: { url.absoluteString.hasPrefix($0.url.absoluteString) }) {
             return drive
+        } else if let drive = startDiscovery(url: url) {
+            drives.append(drive)
+            return drive
         } else {
-            if let drive = startDiscovery(url: url) {
-                drives.append(drive)
-                return drive
-            } else {
-                return nil
-            }
+            return nil
         }
     }
 
