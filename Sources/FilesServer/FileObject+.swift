@@ -1,5 +1,5 @@
 //
-//  FileObject.swift
+//  FileObject+.swift
 //  FileProvider
 //
 //  Created by kintan
@@ -84,6 +84,7 @@ public extension FileObject {
         /// Sorting by file modified date
         case fileSize
         case rating
+        case duration
     }
 }
 
@@ -128,6 +129,8 @@ public extension [FileObject] {
                 return ascending ? $0.fileSize < $1.fileSize : $0.fileSize > $1.fileSize
             case .rating:
                 return ascending ? $0.rating < $1.rating : $0.rating > $1.rating
+            case .duration:
+                return ascending ? $0.duration < $1.duration : $0.duration > $1.duration
             case .none:
                 return false
             }

@@ -23,6 +23,10 @@ public protocol FilesServer: Sendable {
     func play(for url: URL) async throws -> Either<URL, AbstractAVIOContext>
 }
 
+public protocol FilesSearchServer: FilesServer {
+    func search(term _: String) async throws -> [FileObject]
+}
+
 public enum HTTPMethod: String {
     case get = "GET"
     case post = "POST"
@@ -131,6 +135,10 @@ private extension String {
 }
 
 public extension FilesServer {
+    static func scheme(isHttps: Bool) -> String {
+        isHttps ? "https" : "http"
+    }
+
     func play(for url: URL) async throws -> Either<URL, AbstractAVIOContext> {
         .left(url)
     }

@@ -516,3 +516,16 @@ func ratingSortSupportsBothDirectionsAndDirectoriesFirst() {
     #expect([low, folder, high].sorted(by: .rating, ascending: false, isDirectoriesFirst: false).map(\.url)
         == [high.url, folder.url, low.url])
 }
+
+@Test
+func 时长排序支持双向及目录优先() {
+    let root = URL(string: "https://example.com")!
+    let short = FileObject(url: root.appendingPathComponent("short"), allValues: [.durationKey: Int16(60)])
+    let long = FileObject(url: root.appendingPathComponent("long"), allValues: [.durationKey: Int16(120)])
+    let folder = FileObject(url: root.appendingPathComponent("folder"), allValues: [
+        .durationKey: Int16(90), .fileResourceTypeKey: URLFileResourceType.directory,
+    ])
+    #expect([long, folder, short].sorted(by: .duration).map(\.url) == [folder.url, short.url, long.url])
+    #expect([short, folder, long].sorted(by: .duration, ascending: false, isDirectoriesFirst: false).map(\.url)
+        == [long.url, folder.url, short.url])
+}
